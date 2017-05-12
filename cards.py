@@ -1,82 +1,115 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Aug 07 14:11:32 2015
+Created on Wed May 10 13:40:12 2017
 
-@author: zhenlanwang
 """
+import numpy as np
+import itertools
+from copy import deepcopy as copy
 
-class card:
-    def __init__(self,suit,rank):
-        self.suit=suit
-        self.rank=rank
+
+def GenX(n,d):
+    return np.random.randn(n,d)
     
-    suitList = ["Clubs", "Diamonds", "Hearts", "Spades"]
-    rankList = ["narf", "Ace", "2", "3", "4", "5", "6", "7","8", "9", "10", "Jack", "Queen", "King"]
+class GenY(object):
     
-    def __str__(self):
-        return self.rankList[self.rank] + " of " +self.suitList[self.suit]
+    def __init__(self,dim,nonFun,bias=0,noise=1e-1):
+        self.dim = dim
+        self.nonFun = nonFun
+        self.noise = noise
+        self.bias = bias
+        self.beta = []
+        for i in range(len(dim)-1):
+            self.beta.append(np.random.randn(dim[i],dim[i+1])/2)
+    
+    def predict(self,X):
+        for para in self.beta:
+            X = self.nonFun(np.dot(X,para))
+        return np.argmax(X + self.bias + np.random.randn(*X.shape) * self.noise,1)
         
-    def __cmp__(self,other):
-        if self.suit>other.suit:
-            return 1
-        elif self.suit<other.suit:
-            return -1
-        elif self.rank>other.rank:
-            return 1
-        elif self.rank<other.rank:
-            return -1
+class GenMiss(object):
+    
+    def __init__(self,betaGen,d,bias=0,noise=1e-1):
+        # betaGen == np.random.randn is the most general case
+        # whereas == np.zeros assumes missing at random
+        self.beta = betaGen(d+1,d)
+        self.noise = noise
+        self.bias = bias
+    
+    def predict(self,X,y):
+        X_miss = copy(X)
+        X_miss[np.dot(np.c_[X,y],self.beta) + np.random.randn(*X.shape) * self.noise > self.bias] = np.nan
+        return X_miss
+        
+def allComb2(VecIn_,IndexIn_,RemList_,X,lower,upper):
+    
+    if len(RemList_) == 0:
+        temp = np.sum(VecIn_)
+        if temp<upper:
+            return [VecIn_],[IndexIn_]
         else:
-            return 0
-    
-class deck:
-    def __init__(self):
-        self.cards = []
-        for suit in range(4):
-            for rank in range(1, 14):
-                self.cards.append(card(suit, rank))
-    def printDeck(self):
-        for i in self.cards:
-            print i
-    def popCard(self):
-        return self.cards.pop()
-    def isEmpty(self):
-        return (len(self.cards) == 0)
-    def deal(self,hands,nCards=999):
-        nHands=len(hands)
-        for i in range(nCards):
-            if self.isEmpty():
-                break
-            card=self.popCard()
-            hand=hands[i % nHands]
-            hand.addCard(card)
+            return [],[]
+    else:
+        curr = RemList_.pop()
+        leftVec,leftIndex = allComb2(VecIn_,copy(IndexIn_),copy(RemList_),X,lower,upper) # does not have curr
+        
+        temp2 = VecIn_*X[:,curr]
+        if np.sum(temp2)>lower: # prune tree
+            IndexIn_.append(curr)
+            rightVec,rightIndex = allComb2(temp2,IndexIn_,RemList_,X,lower,upper) # have curr
+            leftVec.extend(rightVec)
+            leftIndex.extend(rightIndex)
 
-class hand(deck):
-    def __init__(self,name):
-        self.cards=[]
-        self.name=name
-    def addCard(self,card):
-        self.cards.append(card)
-            
+        return leftVec, leftIndex
         
+def combArray(X1,X2):
+    return np.stack([X1[:,i]*X2[:,j] for i,j in itertools.product(range(X1.shape[1]),range(X2.shape[1]))],1)
     
+class MissingImputation2(object):
     
+    def __init__(self,lower,upper):
+        self.lower = lower
+        self.upper = upper
+        self.interactionList = []
     
+    def fit(self,X): 
+        X = copy(X)
+        n,d = X.shape
+        self.mean = np.nanmean(X)
+        lower, upper = n * self.lower, n * self.upper
+        X_nan = np.isnan(X)
+        X_transf,self.interactionList = allComb2(np.ones(n,dtype='bool'),[],range(d),X_nan,lower,upper)
+        X_transf = np.stack(X_transf,1)
+        X[X_nan] = self.mean
+        return np.c_[X,X_transf,combArray(X,X_transf)]
     
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    def predict(self,X):
+        X = copy(X)
+        n,_ = X.shape
+        d = len(self.interactionList)
+        X_transf = np.ones((n,d),dtype='bool')
+        X_nan = np.isnan(X)
+        X[X_nan] = self.mean
+        for count_,i in enumerate(self.interactionList):
+            for j in i:
+                X_transf[:,count_] = X_transf[:,count_] * X_nan[:,j]
+        return np.c_[X,X_transf,combArray(X,X_transf)]
         
-            
+class SimplyImputation(object):
+    # fill in marginal mean/median
+    def __init__(self,method='mean'):
+        self.method = method
+    
+    def fit(self,X): 
+        self.para = np.nanmean(X,0) if self.method == 'mean' else np.nanmedian(X,0)
+        X_transf = np.ones_like(X) * self.para
+        index_ = np.logical_not(np.isnan(X))
+        X_transf[index_] = X[index_]
+        return X_transf
+    
+    def predict(self,X):
+        X_transf = np.ones_like(X) * self.para
+        index_ = np.logical_not(np.isnan(X))
+        X_transf[index_] = X[index_]
+        return X_transf    
+        
