@@ -7,12 +7,14 @@ import numpy as np
 import itertools
 from copy import deepcopy as copy
 
+''' GenX, GenY, and GenMiss are only used in simulation to compare the performance of different way of missing value imputations.
+    hence, not needed in usual usage case of MissingImputation2 '''
 
 def GenX(n,d):
     return np.random.randn(n,d)
     
 class GenY(object):
-    
+    # simulate y as multilayer perceptron of X
     def __init__(self,dim,nonFun,bias=0,noise=1e-1):
         self.dim = dim
         self.nonFun = nonFun
@@ -28,17 +30,21 @@ class GenY(object):
         return np.argmax(X + self.bias + np.random.randn(*X.shape) * self.noise,1)
         
 class GenMiss(object):
-    
-    def __init__(self,betaGen,d,bias=0,noise=1e-1):
+    # simulate a masked version of X, where masked X is missing and later filled in by imputation  
+    def __init__(self,betaGen,d,nonFun=None,bias=0,noise=1e-1):
         # betaGen == np.random.randn is the most general case
         # whereas == np.zeros assumes missing at random
         self.beta = betaGen(d+1,d)
         self.noise = noise
         self.bias = bias
+        self.nonFun = nonFun
     
     def predict(self,X,y):
         X_miss = copy(X)
-        X_miss[np.dot(np.c_[X,y],self.beta) + np.random.randn(*X.shape) * self.noise > self.bias] = np.nan
+        if self.nonFun is None:
+            X_miss[np.dot(np.c_[X,y],self.beta) + np.random.randn(*X.shape) * self.noise > self.bias] = np.nan
+        else:                
+            X_miss[self.nonFun(np.dot(np.c_[X,y],self.beta)) + np.random.randn(*X.shape) * self.noise > self.bias] = np.nan
         return X_miss
         
 def allComb2(VecIn_,IndexIn_,RemList_,X,lower,upper):
@@ -66,7 +72,8 @@ def combArray(X1,X2):
     return np.stack([X1[:,i]*X2[:,j] for i,j in itertools.product(range(X1.shape[1]),range(X2.shape[1]))],1)
     
 class MissingImputation2(object):
-    
+    # Create missing dummies for all variables and all possible interaction(2^d of them) 
+    # terms of dummies created that satisfies the sparsity bounds. 
     def __init__(self,lower,upper):
         self.lower = lower
         self.upper = upper
